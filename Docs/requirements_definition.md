@@ -35,8 +35,8 @@
 
 
 * **動的3Dモデル生成:**
-* `glTFast` を使用し、GDTF内の `.gltf` / `.bin` モデルデータをUnityのPrefabまたはGameObjectとしてScene上に生成する。
-* XMLのジョイント構造（Base -> Yoke -> Head）に従い、可動部となる `Transform` 階層を自動構築する。
+  * `glTFast` を使用し、GDTF内の `.gltf` / `.bin` モデルデータをUnityのPrefabまたはGameObjectとしてScene上に生成する。
+  * XMLのジョイント構造（Base -> Yoke -> Head）に従い、可動部となる `Transform` 階層を自動構築する。
 
 
 * **DMX Mode切り替え:**
