@@ -28,12 +28,12 @@ namespace Core.Network
 
         private void OnEnable()
         {
-            
+            StartReceive();
         }
 
         private void OnDisable()
         {
-            
+            StopReceive();
         }
 
         private void StartReceive()
@@ -56,6 +56,23 @@ namespace Core.Network
             {
                 Debug.LogError($"Failed to start Art-Net receiver: {e.Message}");
             }
+        }
+        
+        private void StopReceive()
+        {
+            _isRunning = false;
+            
+            if (_udpClient != null)
+            {
+                _udpClient.Close();
+                _udpClient = null;
+            }
+            
+            if (_receiveThread != null && _receiveThread.IsAlive)
+            {
+                _receiveThread.Join();
+            }
+            Debug.Log("[Art-Net receiver] stopped");
         }
 
         private void ReceiveLoop()
