@@ -42,7 +42,7 @@ namespace Editor.Windows
             }
             
             // ArtNetReceiverをシーンから探す
-            var receiver = FindObjectOfType<ArtNetReceiver>();
+            var receiver = FindAnyObjectByType<ArtNetReceiver>();
             if (receiver == null || receiver.DmxBuffer == null)
             {
                 EditorGUILayout.HelpBox("No ArtNetReceiver found in the scene.", MessageType.Warning);
