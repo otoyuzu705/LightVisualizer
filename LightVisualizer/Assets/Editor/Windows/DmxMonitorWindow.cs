@@ -55,7 +55,7 @@ namespace Editor.Windows
             // 選択されたユニバースの開始インデックス
             int startIndex = _selectedUniverse * DmxBuffer.ChannelsPerUniverse;
             
-            
+            DrawDmxGrid(dmxData, startIndex);
         }
 
         /// <summary>
