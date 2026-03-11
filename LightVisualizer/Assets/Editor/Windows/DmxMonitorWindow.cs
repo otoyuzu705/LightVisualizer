@@ -7,7 +7,7 @@ namespace Editor.Windows
 { 
     public class DmxMonitorWindow : EditorWindow
     {
-        private int _selectedUniverse = 0;
+        private int _selectedUniverse = 0; // 内部インデックスは0始まり
         private Vector2 _scrollPosition;
 
         [MenuItem("Window/DMX Monitor")]
@@ -31,8 +31,13 @@ namespace Editor.Windows
             GUILayout.Label("Art-Net DMX Monitor", EditorStyles.boldLabel);
             EditorGUILayout.Space();
             
-            // ユニバース選択
-            _selectedUniverse = EditorGUILayout.IntSlider("Universe", _selectedUniverse, 0, DmxBuffer.Universes - 1);
+            // ユニバース選択（表示は1始まり、内部は0始まり）
+            string[] universeOptions = new string[DmxBuffer.Universes];
+            for (int i = 0; i < DmxBuffer.Universes; i++)
+            {
+                universeOptions[i] = $"Universe {i + 1}";
+            }
+            _selectedUniverse = EditorGUILayout.Popup("Universe", _selectedUniverse, universeOptions);
             EditorGUILayout.Space();
 
             if (!EditorApplication.isPlaying)
@@ -59,13 +64,13 @@ namespace Editor.Windows
         }
 
         /// <summary>
-        /// DMX512チャンネルを16列グリッドで描画する
+        /// DMX512チャンネルを32列グリッドで描画する
         /// </summary>
         private void DrawDmxGrid(byte[] dmxData, int startIndex)
         {
             _scrollPosition = EditorGUILayout.BeginScrollView(_scrollPosition);
             
-            int columns = 16;
+            int columns = 32;
             int rows = DmxBuffer.ChannelsPerUniverse / columns;
             
             // ヘッダー行の描画
@@ -93,7 +98,7 @@ namespace Editor.Windows
                     GUIStyle cellStyle = new GUIStyle(GUI.skin.box)
                     {
                         fixedWidth = 30,
-                        fixedHeight = 20,
+                        fixedHeight = 30,
                         alignment = TextAnchor.MiddleCenter,
                     };
                     cellStyle.normal.textColor = Color.white;
