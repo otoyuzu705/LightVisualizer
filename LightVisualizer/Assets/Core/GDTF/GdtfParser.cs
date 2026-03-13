@@ -10,7 +10,7 @@ namespace Core.GDTF
     public static class GdtfParser
     {
         /// <summary>
-        /// .gdtfファイルを読み込み、descriptor.xmlからGdtfDataを生成する
+        /// .gdtfファイルを読み込み、description.xmlからGdtfDataを生成する
         /// </summary>
         public static GdtfData ParseGdtf(string filePath)
         {
@@ -24,14 +24,14 @@ namespace Core.GDTF
             {
                 using (ZipArchive archive = ZipFile.OpenRead(filePath))
                 {
-                    ZipArchiveEntry descriptorEntry = archive.GetEntry("descriptor.xml");
-                    if (descriptorEntry == null)
+                    ZipArchiveEntry descriptionEntry = archive.GetEntry("description.xml");
+                    if (descriptionEntry == null)
                     {
-                        Debug.LogError("[GdtfParser] descriptor.xml not found in GDTF file");
+                        Debug.LogError("[GdtfParser] description.xml not found in GDTF file");
                         return null;
                     }
 
-                    using (Stream descriptorStream = descriptorEntry.Open())
+                    using (Stream descriptorStream = descriptionEntry.Open())
                     {
                         // XMLをパースしてGdtfDataを生成
                         GdtfData gdtfData = GdtfXmlParser(XDocument.Load(descriptorStream));
