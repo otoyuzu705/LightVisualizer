@@ -17,7 +17,7 @@ namespace Core.Network
         /// </summary>
         public void UpdateUniverse(int universe, byte[] data, int length)
         {
-            if (universe < 0 || universe > Universes * ChannelsPerUniverse) return;
+            if (universe < 0 || universe >= Universes) return;
             
             int copyLength = Mathf.Min(length, ChannelsPerUniverse);
             int startIndex = universe * ChannelsPerUniverse;
