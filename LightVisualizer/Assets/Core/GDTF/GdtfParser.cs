@@ -57,15 +57,18 @@ namespace Core.GDTF
                 Debug.LogError("[GdtfParser] Invalid GDTF XML: Root element 'GDTF' not found");
                 return data;
             }
-            
+            // TODO: GDTF 1.2準拠のため、rootのDataVersion属性（例: "1.2"）を検証する。
+             
             // FixtureType要素を取得
             XElement fixtureType = root.Element("FixtureType");
             if (fixtureType != null)
             {
                 data.Manufacturer = fixtureType.Attribute("Manufacturer")?.Value ?? "Unknown";
                 data.FixtureName = fixtureType.Attribute("Name")?.Value ?? "Unknown";
+                // TODO: GDTF 1.2の属性名はFixtureTypeID。現在のTypeId参照を仕様に合わせて見直す。
                 data.FixtureTypeId = fixtureType.Attribute("TypeId")?.Value ?? "Unknown";
             }
+            // TODO: GDTF 1.2必須子要素（例: AttributeDefinitions / Geometries / DMXModes）の存在検証を追加する。
             
             // DmxMode要素を取得
             var dmxModeElements = root.Descendants("DmxMode");
@@ -93,6 +96,7 @@ namespace Core.GDTF
                             // Offsets属性をカンマ区切りでパース
                             string offsetsStr = channelElement.Attribute("Offsets")?.Value ?? "";
                             string[] offsetParts = offsetsStr.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
+                            // TODO: int.Parse直呼び出しをTryParseベースに変更し、不正Offsets値での例外終了を防ぐ。
                             int[] offsets = Array.ConvertAll(offsetParts, int.Parse);
                             channel.Offets = offsets;
                             
