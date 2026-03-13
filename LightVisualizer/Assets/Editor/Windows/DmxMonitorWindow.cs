@@ -75,6 +75,7 @@ namespace Editor.Windows
             
             // ヘッダー行の描画
             EditorGUILayout.BeginHorizontal();
+            GUILayout.Label("", GUILayout.Width(40)); // 行ラベル列のスペーサー
             for (int col = 0; col < columns; col++)
             {
                 GUILayout.Label($"Column {col + 1}", EditorStyles.centeredGreyMiniLabel, GUILayout.Width(30));
