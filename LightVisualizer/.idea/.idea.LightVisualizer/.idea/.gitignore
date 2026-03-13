@@ -11,3 +11,5 @@
 # Datasource local storage ignored files
 /dataSources/
 /dataSources.local.xml
+# Copilot migration state files
+/copilot.data.migration.ask2agent.xml
