@@ -40,13 +40,14 @@ namespace Editor.Windows
                         for (int i = 0; i < Math.Min(mode.Channels.Count, 5); i++)
                         {
                             var channel = mode.Channels[i];
-                            Debug.Log($"    - Ch: {channel.LogicalChannelId} | Offset: {channel.Offets} | Default: {channel.DefaultValue}");
+                            string offsetsText = channel.Offsets.Length == 0 ? "(none)" : string.Join(",", channel.Offsets);
+                            Debug.Log($"    - Ch: {channel.LogicalChannelId} | Offsets: {offsetsText} | Default: {channel.DefaultValue}");
                         }
                     }
                 }
                 else
                 {
-                    Debug.LogWarning("[GDTF Parser Tester] No GDTF file selected.");
+                    Debug.LogWarning("[GDTF Parser Tester] Failed to parse selected GDTF file.");
                 }
             }
             catch (Exception e)
