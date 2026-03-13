@@ -100,6 +100,9 @@ namespace Core.Network
         private void ProcessPacket(byte[] data)
         {
             if (data == null) return;
+
+            // パケット長の最低限チェック（ヘッダー18バイト以上必要）
+            if (data.Length < 18) return;
             
             // ヘッダーの検証
             for (int i = 0; i < 8; i++)
@@ -115,7 +118,10 @@ namespace Core.Network
             int universe = data[14] | (data[15] << 8);
             
             int length = (data[16] << 8) | data[17];
-            if (length > 512) return; 
+            if (length < 0 || length > 512) return;
+
+            // DMXデータ領域の長さチェック
+            if (data.Length < 18 + length) return;
             
             // DMXデータの更新
             byte[] dmxData = new byte[length];
