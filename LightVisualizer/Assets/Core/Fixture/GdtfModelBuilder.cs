@@ -61,7 +61,28 @@ namespace Core.Fixture
             {
                 // --- 4. FixtureInstance をアタッチ ---
                 var fixture = root.AddComponent<FixtureInstance>();
+                // プロジェクト相対パス（"Assets/..."）で保存する。
+                // 絶対パスは他マシン・リポジトリ移動後に壊れるため AssetDatabase 経由で変換する。
+#if UNITY_EDITOR
+                string assetRelPath = UnityEditor.AssetDatabase.AssetPathToGUID(gdtfFilePath) != ""
+                    ? UnityEditor.AssetDatabase.GetAssetPath(
+                        UnityEditor.AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(gdtfFilePath))
+                    : gdtfFilePath;
+                // LoadAssetAtPath が null になるケース（ZIP は DefaultAsset）の補完
+                if (string.IsNullOrEmpty(assetRelPath))
+                {
+                    // 絶対パス → "Assets/..." に手動変換
+                    string dataPath = Application.dataPath;
+                    if (gdtfFilePath.StartsWith(dataPath))
+                        assetRelPath = "Assets" + gdtfFilePath.Substring(dataPath.Length)
+                                           .Replace(System.IO.Path.DirectorySeparatorChar, '/');
+                    else
+                        assetRelPath = gdtfFilePath; // 変換できない場合はそのまま（後方互換）
+                }
+                fixture.GdtfFilePath = assetRelPath;
+#else
                 fixture.GdtfFilePath = gdtfFilePath;
+#endif
                 fixture.GdtfData     = gdtfData;
 
                 // GDTF から取得した物理限界・ビーム情報を FixtureInstance に書き込む
@@ -491,22 +512,5 @@ namespace Core.Fixture
         public float BeamAngle       { get; set; } = 20f;
         public float LuminousFlux    { get; set; } = 10000f;
         public float ColorTemperature{ get; set; } = 6500f;
-    }
-
-    /// <summary>
-    /// GltfImport を GameObject のライフタイムに紐付けて保持するコンポーネント。
-    /// GltfImport は Dispose() すると生成したメッシュ・マテリアルが破棄されるため、
-    /// GameObject が Destroy されるまで解放してはいけない。
-    /// OnDestroy() で Dispose() することで適切なタイミングで解放する。
-    /// </summary>
-    internal sealed class GltfImportHolder : MonoBehaviour
-    {
-        public GltfImport Import { get; set; }
-
-        private void OnDestroy()
-        {
-            Import?.Dispose();
-            Import = null;
-        }
     }
 }

@@ -89,7 +89,6 @@ namespace Editor.Windows
                     var d = _gdtfDataCache[i];
                     label = $"{d.Manufacturer}  {d.FixtureName}";
                 }
-
                 if (GUILayout.Button(label, EditorStyles.label))
                 {
                     _selectedIndex = i;
@@ -154,18 +153,31 @@ namespace Editor.Windows
             _selectedIndex = -1;
             _lastError     = null;
 
+            // プロジェクト相対パス（Assets/...）で保存する。
+            // 絶対パスにすると他のマシンやリポジトリ移動後に壊れる。
             string[] guids = AssetDatabase.FindAssets("t:DefaultAsset");
             foreach (var guid in guids)
             {
-                string path = AssetDatabase.GUIDToAssetPath(guid);
-                if (!path.EndsWith(".gdtf", StringComparison.OrdinalIgnoreCase)) continue;
+                string assetPath = AssetDatabase.GUIDToAssetPath(guid);
+                if (!assetPath.EndsWith(".gdtf", StringComparison.OrdinalIgnoreCase)) continue;
 
-                string absPath = Path.GetFullPath(path);
-                _gdtfPaths.Add(absPath);
-                _gdtfDataCache.Add(GdtfParser.ParseGdtf(absPath));
+                _gdtfPaths.Add(assetPath);       // "Assets/..." 形式の相対パス
+                _gdtfDataCache.Add(null);         // 遅延パース：選択時に初めてパースする
             }
 
             Repaint();
+        }
+
+        /// <summary>
+        /// プロジェクト相対パス（"Assets/..."）を絶対パスに変換して返す。
+        /// GdtfParser や ZipFile.OpenRead は絶対パスが必要なため。
+        /// </summary>
+        private static string ToAbsolutePath(string assetPath)
+        {
+            // Application.dataPath は "..../Assets" なので、"Assets" を除いて結合する
+            string projectRoot = Application.dataPath.Substring(
+                0, Application.dataPath.Length - "Assets".Length);
+            return System.IO.Path.Combine(projectRoot, assetPath).Replace('/', System.IO.Path.DirectorySeparatorChar);
         }
 
         // ----------------------------------------------------------------
@@ -176,25 +188,30 @@ namespace Editor.Windows
 
         private async Task PlaceSelectedFixtureAsync()
         {
-            // ダブルクリック連打による2タスク並走を防ぐ
-            // (_isLoading = true への代入より前に2回目が入るケースを防ぐ)
             if (_isLoading) return;
             if (_selectedIndex < 0 || _selectedIndex >= _gdtfPaths.Count) return;
 
-            string   gdtfPath = _gdtfPaths[_selectedIndex];
+            // 保存されているのはプロジェクト相対パス。ZipFile等には絶対パスが必要なので変換する。
+            string assetPath = _gdtfPaths[_selectedIndex];
+            string absPath   = ToAbsolutePath(assetPath);
+
+            // 遅延パース：未パースの場合はここで初めてパースする
             GdtfData gdtfData = _gdtfDataCache.Count > _selectedIndex
                 ? _gdtfDataCache[_selectedIndex]
                 : null;
 
             if (gdtfData == null)
             {
-                gdtfData = GdtfParser.ParseGdtf(gdtfPath);
+                gdtfData = GdtfParser.ParseGdtf(absPath);
                 if (gdtfData == null)
                 {
-                    _lastError = $"Failed to parse GDTF:\n{gdtfPath}";
+                    _lastError = $"Failed to parse GDTF:\n{assetPath}";
                     Repaint();
                     return;
                 }
+                // キャッシュに保存
+                if (_gdtfDataCache.Count > _selectedIndex)
+                    _gdtfDataCache[_selectedIndex] = gdtfData;
             }
 
             Vector3 spawnPos = GetSceneViewCenter();
@@ -204,7 +221,7 @@ namespace Editor.Windows
             try
             {
                 GameObject fixtureGo =
-                    await GdtfModelBuilder.BuildAsync(gdtfPath, gdtfData, spawnPos);
+                    await GdtfModelBuilder.BuildAsync(absPath, gdtfData, spawnPos);
 
                 if (fixtureGo != null)
                 {

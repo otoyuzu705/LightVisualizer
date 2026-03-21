@@ -85,15 +85,21 @@ namespace Core.Fixture
                 return;
             }
 
-            // スナップショット全体を取得してからキャッシュ配列へコピー（new しない）
-            byte[] snapshot = _receiver.DmxBuffer.GetDmxDataSnapshot();
-            // Universe は Inspector 上1始まり（業界標準に合わせる）
-            // DmxBuffer は0始まりなので -1 して変換する
-            int universeStart = (_fixture.Universe - 1) * DmxBuffer.ChannelsPerUniverse;
-            System.Buffer.BlockCopy(
-                snapshot, universeStart,
-                _universeDmxCache, 0,
-                DmxBuffer.ChannelsPerUniverse);
+            // スナップショット全体を取得せず、対象ユニバースだけを直接コピー（ノーアロケート）
+            // Universe は Inspector 上1始まり → DmxBuffer 内部の0始まりに変換
+            int universeIndex = _fixture.Universe - 1;
+            if (!_receiver.DmxBuffer.CopyUniverseTo(universeIndex, _universeDmxCache))
+            {
+                // Universe が範囲外（0未満 or 32以上）の場合はスキップ
+                if (!_warnedOnce)
+                {
+                    _warnedOnce = true;
+                    Debug.LogWarning(
+                        $"[FixtureController] Universe {_fixture.Universe} is out of range " +
+                        $"(valid: 1-{DmxBuffer.Universes}) on '{gameObject.name}'");
+                }
+                return;
+            }
 
             ApplyDmx(_universeDmxCache);
         }

@@ -60,14 +60,20 @@ namespace Core.GDTF
 
         private static GdtfData ParseXml(XDocument doc)
         {
-            var data = new GdtfData();
+            if (doc == null)
+            {
+                Debug.LogError("[GdtfParser] Invalid GDTF XML: document is null");
+                return null;
+            }
 
             XElement root = doc.Root;
             if (root == null || !string.Equals(root.Name.LocalName, "GDTF", StringComparison.Ordinal))
             {
                 Debug.LogError("[GdtfParser] Invalid GDTF XML: root element 'GDTF' not found");
-                return data;
+                return null;
             }
+
+            var data = new GdtfData();
 
             // FixtureType
             XElement fixtureType = root.Descendants()

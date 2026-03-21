@@ -12,12 +12,35 @@ namespace Core.Fixture
     {
         // ---- 灯体メタ情報 ------------------------------------------------
 
-        /// <summary>元の GDTF ファイルパス（Domain Reload 後の再パース用）</summary>
+        /// <summary>
+        /// GDTF ファイルのプロジェクト相対パス（"Assets/..." 形式）。
+        /// 絶対パスではなく相対パスで保存することでリポジトリの可搬性を確保する。
+        /// </summary>
         [SerializeField] private string _gdtfFilePath = "";
+
+        /// <summary>プロジェクト相対パスとして保存されている GDTF ファイルパス</summary>
         public string GdtfFilePath
         {
             get => _gdtfFilePath;
             set => _gdtfFilePath = value;
+        }
+
+        /// <summary>
+        /// _gdtfFilePath（相対）を絶対パスに変換して返す。
+        /// 既に絶対パスの場合はそのまま返す（後方互換）。
+        /// </summary>
+        private string GetAbsoluteGdtfPath()
+        {
+            if (string.IsNullOrEmpty(_gdtfFilePath)) return "";
+
+            // 既に絶対パスなら変換不要（旧データとの後方互換）
+            if (System.IO.Path.IsPathRooted(_gdtfFilePath)) return _gdtfFilePath;
+
+            // "Assets/..." → 絶対パスに変換
+            string projectRoot = Application.dataPath.Substring(
+                0, Application.dataPath.Length - "Assets".Length);
+            return System.IO.Path.Combine(projectRoot, _gdtfFilePath)
+                       .Replace('/', System.IO.Path.DirectorySeparatorChar);
         }
 
         /// <summary>
@@ -130,10 +153,11 @@ namespace Core.Fixture
             // Domain Reload 後に GdtfData が消えている場合、ファイルパスから再パースして復元する
             if (GdtfData == null && !string.IsNullOrEmpty(_gdtfFilePath))
             {
-                GdtfData = GdtfParser.ParseGdtf(_gdtfFilePath);
+                string absPath = GetAbsoluteGdtfPath();
+                GdtfData = GdtfParser.ParseGdtf(absPath);
                 if (GdtfData == null)
                     Debug.LogWarning(
-                        $"[FixtureInstance] Failed to restore GdtfData from: {_gdtfFilePath}");
+                        $"[FixtureInstance] Failed to restore GdtfData from: {absPath}");
             }
         }
     }
