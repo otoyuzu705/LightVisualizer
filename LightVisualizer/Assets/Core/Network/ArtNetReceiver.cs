@@ -9,20 +9,24 @@ namespace Core.Network
     public class ArtNetReceiver : MonoBehaviour
     {
         [Header("Network Settings")]
-        [SerializeField] private int port = 6454; // Art-Netのデフォルトポート
-        
+        [SerializeField] private int port = 6454;
+
         public DmxBuffer DmxBuffer { get; private set; }
-        
+
         private UdpClient _udpClient;
         private Thread _receiveThread;
-        private bool _isRunning = false;
-        
-        // Art-Netヘッダ
-        private readonly byte[] _artNetHeader = new byte[] { 0x41, 0x72, 0x74, 0x2D, 0x4E, 0x65, 0x74, 0x00 };
+        private volatile bool _isRunning = false;
+
+        // Art-Net ヘッダー: "Art-Net\0"
+        private static readonly byte[] ArtNetHeader =
+            { 0x41, 0x72, 0x74, 0x2D, 0x4E, 0x65, 0x74, 0x00 };
+
+        // スレッド終了を待つ最大時間
+        private static readonly TimeSpan ThreadJoinTimeout = TimeSpan.FromSeconds(2);
 
         private void Awake()
         {
-            this.DmxBuffer = new DmxBuffer();
+            DmxBuffer = new DmxBuffer();
         }
 
         private void OnEnable()
@@ -49,50 +53,62 @@ namespace Core.Network
                     Name = "ArtNetReceiverThread"
                 };
                 _receiveThread.Start();
-                Debug.Log($"[Art-Net receiver] started listening on port {port}");
+                Debug.Log($"[ArtNetReceiver] Started listening on port {port}");
             }
             catch (Exception e)
             {
-                Debug.LogError($"Failed to start Art-Net receiver: {e.Message}");
+                Debug.LogError($"[ArtNetReceiver] Failed to start: {e.Message}");
             }
         }
-        
+
         private void StopReceive()
         {
             _isRunning = false;
-            
+
+            // Close() で Receive() のブロックを解除し SocketException を発生させる
             if (_udpClient != null)
             {
                 _udpClient.Close();
                 _udpClient = null;
             }
-            
+
             if (_receiveThread != null && _receiveThread.IsAlive)
             {
-                _receiveThread.Join();
+                // タイムアウト付き Join でエディタの無限待機を防ぐ
+                if (!_receiveThread.Join(ThreadJoinTimeout))
+                {
+                    Debug.LogWarning("[ArtNetReceiver] Receive thread did not stop within timeout");
+                }
+                _receiveThread = null;
             }
-            Debug.Log("[Art-Net receiver] stopped");
+
+            Debug.Log("[ArtNetReceiver] Stopped");
         }
 
         private void ReceiveLoop()
         {
-            IPEndPoint endPoint = new IPEndPoint(IPAddress.Any, 0);
+            var endPoint = new IPEndPoint(IPAddress.Any, 0);
 
             while (_isRunning)
             {
                 try
                 {
-                    // データ受信
                     byte[] data = _udpClient.Receive(ref endPoint);
                     ProcessPacket(data);
                 }
                 catch (SocketException)
                 {
+                    // Close() による正常終了、またはネットワークエラー
+                    break;
+                }
+                catch (ObjectDisposedException)
+                {
+                    // UdpClient が Dispose 済みの場合（Close 直後のレース）
                     break;
                 }
                 catch (Exception e)
                 {
-                    Debug.LogError($"[ArtNetReceiver] Error receiving data: {e.Message}");
+                    Debug.LogError($"[ArtNetReceiver] Unexpected error: {e.Message}");
                 }
             }
         }
@@ -101,35 +117,33 @@ namespace Core.Network
         {
             if (data == null) return;
 
-            // パケット長の最低限チェック（ヘッダー18バイト以上必要）
+            // 最低限のパケット長チェック（Art-Net ヘッダー 8 + OpCode 2 + ProtVer 2 + Sequence 1
+            //  + Physical 1 + SubUni 1 + Net 1 + Length 2 = 18 バイト + DMXデータ）
             if (data.Length < 18) return;
-            
-            // ヘッダーの検証
-            for (int i = 0; i < 8; i++)
+
+            // Art-Net ヘッダー検証
+            for (int i = 0; i < ArtNetHeader.Length; i++)
             {
-                if (data[i] != _artNetHeader[i]) return; 
+                if (data[i] != ArtNetHeader[i]) return;
             }
-            
-            // OpCodeの検証
-            ushort opCode = BitConverter.ToUInt16(data, 8);
-            if (opCode != 0x5000) return; // ArtDMXパケットのみ処理
-            
-            // ユニバースの計算
+
+            // OpCode: ArtDMX = 0x5000 (リトルエンディアン)
+            ushort opCode = (ushort)(data[8] | (data[9] << 8));
+            if (opCode != 0x5000) return;
+
+            // Universe: SubUni(data[14]) + Net(data[15]) → Art-Net 4 の15bitユニバース
             int universe = data[14] | (data[15] << 8);
-            
+
+            // Length: ビッグエンディアン、必ず偶数、最大512
             int length = (data[16] << 8) | data[17];
-            if (length < 0 || length > 512) return;
+            if (length <= 0 || length > 512) return;
 
-            // DMXデータ領域の長さチェック
             if (data.Length < 18 + length) return;
-            
-            // DMXデータの更新
-            byte[] dmxData = new byte[length];
-            Buffer.BlockCopy(data, 18, dmxData, 0, length);
-            
-            DmxBuffer.UpdateUniverse(universe, dmxData, length);
-            
-        }
-    }    
-}
 
+            var dmxData = new byte[length];
+            Buffer.BlockCopy(data, 18, dmxData, 0, length);
+
+            DmxBuffer.UpdateUniverse(universe, dmxData, length);
+        }
+    }
+}
