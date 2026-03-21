@@ -57,6 +57,7 @@ namespace Core.Network
             }
             catch (Exception e)
             {
+                _isRunning = false;
                 Debug.LogError($"[ArtNetReceiver] Failed to start: {e.Message}");
             }
         }
@@ -65,21 +66,26 @@ namespace Core.Network
         {
             _isRunning = false;
 
-            // Close() で Receive() のブロックを解除し SocketException を発生させる
-            if (_udpClient != null)
-            {
-                _udpClient.Close();
-                _udpClient = null;
-            }
+            // ReceiveLoop 内で使用中の UdpClient をローカル変数に退避してから null にする。
+            // こうすることで ReceiveLoop 側は Close() 後に NullReferenceException ではなく
+            // SocketException / ObjectDisposedException を受け取り、安全にループを抜けられる。
+            UdpClient clientToClose = _udpClient;
+            _udpClient = null;
+            clientToClose?.Close();
 
-            if (_receiveThread != null && _receiveThread.IsAlive)
+            if (_receiveThread != null)
             {
-                // タイムアウト付き Join でエディタの無限待機を防ぐ
-                if (!_receiveThread.Join(ThreadJoinTimeout))
+                bool joined = _receiveThread.Join(ThreadJoinTimeout);
+                if (!joined && _receiveThread.IsAlive)
                 {
+                    // スレッドがまだ生きている場合は参照を保持したまま警告だけ出す。
+                    // null にすると後から Join できなくなり、複数スレッドが起動するリスクが生まれる。
                     Debug.LogWarning("[ArtNetReceiver] Receive thread did not stop within timeout");
                 }
-                _receiveThread = null;
+                else
+                {
+                    _receiveThread = null;
+                }
             }
 
             Debug.Log("[ArtNetReceiver] Stopped");
@@ -87,29 +93,42 @@ namespace Core.Network
 
         private void ReceiveLoop()
         {
+            // ループ開始時点の UdpClient をローカルにキャプチャする。
+            // StopReceive() がフィールドを null にした後も、このローカル参照経由で
+            // Receive() が SocketException を返すまで安全にループを継続できる。
+            UdpClient localClient = _udpClient;
             var endPoint = new IPEndPoint(IPAddress.Any, 0);
 
-            while (_isRunning)
+            try
             {
-                try
+                while (_isRunning)
                 {
-                    byte[] data = _udpClient.Receive(ref endPoint);
-                    ProcessPacket(data);
+                    try
+                    {
+                        byte[] data = localClient.Receive(ref endPoint);
+                        ProcessPacket(data);
+                    }
+                    catch (SocketException)
+                    {
+                        // Close() による正常終了、またはネットワークエラー
+                        break;
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                        // UdpClient が Dispose 済みの場合（Close 直後のレース）
+                        break;
+                    }
+                    catch (Exception e)
+                    {
+                        Debug.LogError($"[ArtNetReceiver] Unexpected error: {e.Message}");
+                    }
                 }
-                catch (SocketException)
-                {
-                    // Close() による正常終了、またはネットワークエラー
-                    break;
-                }
-                catch (ObjectDisposedException)
-                {
-                    // UdpClient が Dispose 済みの場合（Close 直後のレース）
-                    break;
-                }
-                catch (Exception e)
-                {
-                    Debug.LogError($"[ArtNetReceiver] Unexpected error: {e.Message}");
-                }
+            }
+            finally
+            {
+                // 異常終了（過渡的なソケットエラー等）でループを抜けた場合も
+                // _isRunning を false にして StartReceive() が再起動できる状態にする。
+                _isRunning = false;
             }
         }
 
@@ -134,9 +153,9 @@ namespace Core.Network
             // Universe: SubUni(data[14]) + Net(data[15]) → Art-Net 4 の15bitユニバース
             int universe = data[14] | (data[15] << 8);
 
-            // Length: ビッグエンディアン、必ず偶数、最大512
+            // Length: ビッグエンディアン、仕様上は必ず偶数、最大512
             int length = (data[16] << 8) | data[17];
-            if (length <= 0 || length > 512) return;
+            if (length <= 0 || length > 512 || (length & 1) != 0) return;
 
             if (data.Length < 18 + length) return;
 
