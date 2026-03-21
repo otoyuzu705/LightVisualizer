@@ -41,7 +41,7 @@ namespace Editor.Windows
                         {
                             var channel = mode.Channels[i];
                             string offsetsText = channel.Offsets.Length == 0 ? "(none)" : string.Join(",", channel.Offsets);
-                            Debug.Log($"    - Ch: {channel.LogicalChannelId} | Offsets: {offsetsText} | Default: {channel.DefaultValue}");
+                            Debug.Log($"    - Ch: {channel.AttributeName} | Offsets: {offsetsText} | Default: {channel.DefaultValue}");
                         }
                     }
                 }
