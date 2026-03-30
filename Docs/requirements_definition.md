@@ -73,7 +73,6 @@
 
 * **Compute Shaderの活用:** 毎フレームのDMX配列解析から各灯体のTransform回転・Light設定値算出までの処理をGPUにオフロードし、CPUボトルネックを回避する。
 * **カリング (Culling):** カメラの視錐台（Frustum）外にある灯体のボリュメトリック計算を間引き、GPU負荷を軽減する。
-* **GPU Instancing:** 大量の灯体外装モデルの描画負荷を下げるため、Instancingを有効化する。
 
 ## 5. UI/UX 要件 (エディタ拡張機能)
 
