@@ -17,6 +17,14 @@ namespace Core.Fixture
         [SerializeField] private float zoomMin = 5f;
         [SerializeField] private float zoomMax = 50f;
 
+        [Header("Animator")]
+        [Tooltip(
+            "true のとき、Yoke/Head 配下で AnimatorController が未設定の Animator（glTFast インポート由来）を " +
+            "Start() 時に自動無効化する。ユーザーが追加した Animator（演出・ファン等）は " +
+            "AnimatorController が設定されているため無効化されない。\n" +
+            "glTF モデルに独自アニメーションを付けている場合は false にしてください。")]
+        [SerializeField] private bool disableGltfAnimators = true;
+
         // Pan/Tilt 物理限界は GdtfGeometryInfo から Start() 時に設定する（GDTF PhysicalFrom/To）
         // Inspector でオーバーライドしたい場合は SerializeField を付けて使う
         private float _panMin         = -270f;
@@ -77,8 +85,9 @@ namespace Core.Fixture
             // GDTF の物理限界をロード済みデータから取得
             ApplyPhysicalLimitsFromGdtf();
 
-            // glTF インポート由来の Animator が Transform を毎フレーム上書きしないよう無効化
-            DisableImportedAnimators();
+            // AnimatorController 未設定の Animator（glTFast インポート由来）を無効化
+            if (disableGltfAnimators)
+                DisableImportedAnimators();
         }
 
         private void Update()
@@ -149,25 +158,33 @@ namespace Core.Fixture
         }
 
         /// <summary>
-        /// glTFast がインポートした GameObject に付いている Animator を無効化する。
-        /// Animator が有効なままだと localRotation が毎フレーム上書きされ、
-        /// DMX による Pan/Tilt 制御が無効化される。
+        /// Yoke/Head 配下で AnimatorController が未設定の Animator を無効化する。
+        /// glTFast はモデルのインポート時に Animator を追加することがあり、
+        /// コントローラなしの状態でも localRotation を毎フレーム上書きして
+        /// DMX による Pan/Tilt 制御を無効化することがある。
+        /// ユーザーが意図的に追加した Animator（演出・ファン等）は
+        /// 通常 AnimatorController が設定されているため、ここでは対象外となる。
         /// </summary>
         private void DisableImportedAnimators()
         {
-            if (_fixture.YokeTransform != null)
-                foreach (var anim in _fixture.YokeTransform.GetComponentsInChildren<Animator>())
-                {
-                    anim.enabled = false;
-                    Debug.Log($"[FixtureController] Animator disabled on Yoke: {anim.gameObject.name}");
-                }
+            DisableGltfAnimatorsUnder(_fixture.YokeTransform,  "Yoke");
+            DisableGltfAnimatorsUnder(_fixture.HeadTransform,  "Head");
+        }
 
-            if (_fixture.HeadTransform != null)
-                foreach (var anim in _fixture.HeadTransform.GetComponentsInChildren<Animator>())
-                {
-                    anim.enabled = false;
-                    Debug.Log($"[FixtureController] Animator disabled on Head: {anim.gameObject.name}");
-                }
+        private void DisableGltfAnimatorsUnder(Transform root, string label)
+        {
+            if (root == null) return;
+
+            foreach (var anim in root.GetComponentsInChildren<Animator>())
+            {
+                // AnimatorController が設定されている Animator はユーザーが意図したものとみなし触らない
+                if (anim.runtimeAnimatorController != null) continue;
+
+                anim.enabled = false;
+#if UNITY_EDITOR
+                Debug.Log($"[FixtureController] Animator (no controller) disabled on {label}: {anim.gameObject.name}");
+#endif
+            }
         }
 
         // ----------------------------------------------------------------
