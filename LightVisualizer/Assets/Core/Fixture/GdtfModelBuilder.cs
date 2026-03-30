@@ -33,13 +33,23 @@ namespace Core.Fixture
         private static readonly Dictionary<string, GltfImport> _importCache = new();
 
         /// <summary>
+        /// キャッシュ内の全 GltfImport を Dispose したうえでキャッシュをクリアする。
+        /// </summary>
+        private static void DisposeAndClearImportCache()
+        {
+            foreach (var kv in _importCache)
+                kv.Value?.Dispose();
+            _importCache.Clear();
+        }
+
+        /// <summary>
         /// Play モード開始時にキャッシュをクリアする。
         /// Domain Reload が有効な場合は static フィールドが自体リセットされるが、
         /// "Enter Play Mode without Domain Reload" 設定時の保険として明示的にクリアする。
-        /// Dispose() は呼ばない（Unity アセットは Scene 側が保持しているため破棄しない）。
+        /// 前セッションで生成された GltfImport はここで確実に Dispose しておく。
         /// </summary>
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
-        private static void ClearImportCacheOnPlay() => _importCache.Clear();
+        private static void ClearImportCacheOnPlay() => DisposeAndClearImportCache();
 
         // ----------------------------------------------------------------
         // 公開 API
@@ -420,10 +430,11 @@ namespace Core.Fixture
         private static async Task<GameObject> LoadGltfAsync(
             string gltfPath, Transform parent, string cacheKey)
         {
-            // キャッシュから GltfImport を取得する。
-            // 同一 GDTF パーツのマテリアルを複数灯体で共有させることで
-            // Unity の Automatic GPU Instancing によるバッチングを有効にする。
-            bool fromCache = _importCache.TryGetValue(cacheKey, out GltfImport gltfImport);
+            // cacheKey が空の場合はキャッシュをバイパスする。
+            // 空キーで TryGetValue / 代入すると意図しないキャッシュ汚染が起きるため。
+            bool useCache = !string.IsNullOrEmpty(cacheKey);
+            GltfImport gltfImport = null;
+            bool fromCache = useCache && _importCache.TryGetValue(cacheKey, out gltfImport);
 
             if (!fromCache)
             {
@@ -448,7 +459,7 @@ namespace Core.Fixture
                 //   Unity アセットが一緒に破棄され Missing (Mesh) になる。
                 //   キャッシュで保持することでライフタイムを管理し、
                 //   GltfImportHolder による per-GameObject Dispose を行わない。
-                _importCache[cacheKey] = gltfImport;
+                if (useCache) _importCache[cacheKey] = gltfImport;
             }
 
             var modelRoot = new GameObject("Model");
@@ -461,14 +472,19 @@ namespace Core.Fixture
             {
                 Debug.LogError("[GdtfModelBuilder] glTFast failed to instantiate scene");
                 UnityEngine.Object.DestroyImmediate(modelRoot);
+                // 新規ロード分はキャッシュから削除して Dispose し、次回ロードで再試行できるようにする
+                if (!fromCache && useCache)
+                {
+                    _importCache.Remove(cacheKey);
+                    gltfImport.Dispose();
+                }
                 return null;
             }
 
             // キャッシュ管理時は GltfImportHolder を追加しない。
             // GltfImportHolder.OnDestroy() が Dispose() を呼ぶと、キャッシュが保持する
             // 他の灯体インスタンスのアセットまで破壊されてしまうため。
-            // cacheKey が空の場合（将来の拡張用）は従来通り GltfImportHolder に委ねる。
-            if (string.IsNullOrEmpty(cacheKey))
+            if (!useCache)
                 modelRoot.AddComponent<GltfImportHolder>().Import = gltfImport;
 
             EnableMaterialInstancing(modelRoot);
