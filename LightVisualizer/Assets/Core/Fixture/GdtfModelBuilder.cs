@@ -27,6 +27,31 @@ namespace Core.Fixture
             Path.Combine(Application.temporaryCachePath, "GdtfModelTemp");
 
         // ----------------------------------------------------------------
+        // GltfImport キャッシュ（同一GDTFパーツのマテリアル共有 → GPU Instancing 有効化）
+        // キャッシュキー: "{gdtfFilePath}::{partName}" (例: "Assets/Fixtures/Robin.gdtf::base")
+        // ----------------------------------------------------------------
+        private static readonly Dictionary<string, GltfImport> _importCache = new();
+
+        /// <summary>
+        /// キャッシュ内の全 GltfImport を Dispose したうえでキャッシュをクリアする。
+        /// </summary>
+        private static void DisposeAndClearImportCache()
+        {
+            foreach (var kv in _importCache)
+                kv.Value?.Dispose();
+            _importCache.Clear();
+        }
+
+        /// <summary>
+        /// Play モード開始時にキャッシュをクリアする。
+        /// Domain Reload が有効な場合は static フィールドが自体リセットされるが、
+        /// "Enter Play Mode without Domain Reload" 設定時の保険として明示的にクリアする。
+        /// 前セッションで生成された GltfImport はここで確実に Dispose しておく。
+        /// </summary>
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        private static void ClearImportCacheOnPlay() => DisposeAndClearImportCache();
+
+        // ----------------------------------------------------------------
         // 公開 API
         // ----------------------------------------------------------------
 
@@ -94,7 +119,7 @@ namespace Core.Fixture
                 fixture.MaxIntensityLm = geoInfo.LuminousFlux;
 
                 // --- 5. パーツごとに glb をロードし Base→Yoke→Head 階層を構築 ---
-                await BuildHierarchyAsync(root, extractDir, geoInfo, fixture);
+                await BuildHierarchyAsync(root, extractDir, geoInfo, fixture, gdtfFilePath);
 
                 // --- 6. HDRP スポットライトを Head に追加 ---
                 AttachBeamLight(fixture, geoInfo);
@@ -339,11 +364,17 @@ namespace Core.Fixture
             GameObject root,
             string extractDir,
             GdtfGeometryInfo geoInfo,
-            FixtureInstance fixture)
+            FixtureInstance fixture,
+            string gdtfFilePath)
         {
+            // キャッシュキーは GDTF ファイルパス + パーツ名で一意化する
+            string cacheBase = $"{gdtfFilePath}::base";
+            string cacheYoke = $"{gdtfFilePath}::yoke";
+            string cacheHead = $"{gdtfFilePath}::head";
+
             // Base
             Transform baseTransform = await LoadPartAsync(
-                geoInfo.BaseFile, extractDir, root.transform, "Base");
+                geoInfo.BaseFile, extractDir, root.transform, "Base", cacheBase);
             if (baseTransform == null)
                 baseTransform = CreatePlaceholder("Base", root.transform, Vector3.zero);
             // Base は常に root 原点
@@ -352,7 +383,7 @@ namespace Core.Fixture
             // Yoke（Base の子）
             // GDTF Position を Unity 座標系に変換した localPosition を設定
             Transform yokeTransform = await LoadPartAsync(
-                geoInfo.YokeFile, extractDir, baseTransform, "Yoke");
+                geoInfo.YokeFile, extractDir, baseTransform, "Yoke", cacheYoke);
             if (yokeTransform == null)
                 yokeTransform = CreatePlaceholder("Yoke", baseTransform, geoInfo.YokeLocalPos);
             else
@@ -360,7 +391,7 @@ namespace Core.Fixture
 
             // Head（Yoke の子）
             Transform headTransform = await LoadPartAsync(
-                geoInfo.HeadFile, extractDir, yokeTransform, "Head");
+                geoInfo.HeadFile, extractDir, yokeTransform, "Head", cacheHead);
             if (headTransform == null)
                 headTransform = CreatePlaceholder("Head", yokeTransform, geoInfo.HeadLocalPos);
             else
@@ -372,7 +403,7 @@ namespace Core.Fixture
         }
 
         private static async Task<Transform> LoadPartAsync(
-            string fileBase, string extractDir, Transform parent, string partName)
+            string fileBase, string extractDir, Transform parent, string partName, string cacheKey)
         {
             if (string.IsNullOrEmpty(fileBase)) return null;
 
@@ -389,56 +420,91 @@ namespace Core.Fixture
                 return null;
             }
 
-            var partGo = await LoadGltfAsync(target, parent);
+            var partGo = await LoadGltfAsync(target, parent, cacheKey);
             if (partGo == null) return null;
 
             partGo.name = partName;
             return partGo.transform;
         }
 
-        private static async Task<GameObject> LoadGltfAsync(string gltfPath, Transform parent)
+        private static async Task<GameObject> LoadGltfAsync(
+            string gltfPath, Transform parent, string cacheKey)
         {
-            // UninterruptedDeferAgent を渡すことで DontDestroyOnLoad を回避し
-            // エディタモードでも動作させる
-            var deferAgent = new UninterruptedDeferAgent();
-            var logger     = new ConsoleLogger();
+            // cacheKey が空の場合はキャッシュをバイパスする。
+            // 空キーで TryGetValue / 代入すると意図しないキャッシュ汚染が起きるため。
+            bool useCache = !string.IsNullOrEmpty(cacheKey);
+            GltfImport gltfImport = null;
+            bool fromCache = useCache && _importCache.TryGetValue(cacheKey, out gltfImport);
 
-            // ※ GltfImport は Dispose() するとメッシュ・マテリアル等の
-            //   Unity アセットが一緒に破棄され Missing (Mesh) になる。
-            //   インスタンスはメッシュが不要になるまで生存させる必要があるため、
-            //   using は使わない。Unity のシーン破棄時に GC に任せる。
-            var gltfImport = new GltfImport(
-                downloadProvider:  null,
-                deferAgent:        deferAgent,
-                materialGenerator: null,
-                logger:            logger
-            );
-
-            bool success = await gltfImport.Load(new Uri(gltfPath));
-            if (!success)
+            if (!fromCache)
             {
-                Debug.LogError($"[GdtfModelBuilder] glTFast failed to load: {gltfPath}");
-                gltfImport.Dispose();
-                return null;
+                // UninterruptedDeferAgent を渡すことで DontDestroyOnLoad を回避し
+                // エディタモードでも動作させる
+                gltfImport = new GltfImport(
+                    downloadProvider:  null,
+                    deferAgent:        new UninterruptedDeferAgent(),
+                    materialGenerator: null,
+                    logger:            new ConsoleLogger()
+                );
+
+                bool success = await gltfImport.Load(new Uri(gltfPath));
+                if (!success)
+                {
+                    Debug.LogError($"[GdtfModelBuilder] glTFast failed to load: {gltfPath}");
+                    gltfImport.Dispose();
+                    return null;
+                }
+
+                // ※ GltfImport は Dispose() するとメッシュ・マテリアル等の
+                //   Unity アセットが一緒に破棄され Missing (Mesh) になる。
+                //   キャッシュで保持することでライフタイムを管理し、
+                //   GltfImportHolder による per-GameObject Dispose を行わない。
+                if (useCache) _importCache[cacheKey] = gltfImport;
             }
 
             var modelRoot = new GameObject("Model");
             modelRoot.transform.SetParent(parent, worldPositionStays: false);
 
+            // 同一 GltfImport から複数回 InstantiateMainSceneAsync を呼び出すことで
+            // マテリアルインスタンスが共有され GPU Instancing が機能する
             bool instantiated = await gltfImport.InstantiateMainSceneAsync(modelRoot.transform);
             if (!instantiated)
             {
                 Debug.LogError("[GdtfModelBuilder] glTFast failed to instantiate scene");
                 UnityEngine.Object.DestroyImmediate(modelRoot);
-                gltfImport.Dispose();
+                // 新規ロード分はキャッシュから削除して Dispose し、次回ロードで再試行できるようにする
+                if (!fromCache && useCache)
+                {
+                    _importCache.Remove(cacheKey);
+                    gltfImport.Dispose();
+                }
                 return null;
             }
 
-            // GltfImport をアセットのライフタイム管理用コンポーネントとして
-            // modelRoot に保持させる（GameObject が Destroy されたとき一緒に解放）
-            modelRoot.AddComponent<GltfImportHolder>().Import = gltfImport;
+            // キャッシュ管理時は GltfImportHolder を追加しない。
+            // GltfImportHolder.OnDestroy() が Dispose() を呼ぶと、キャッシュが保持する
+            // 他の灯体インスタンスのアセットまで破壊されてしまうため。
+            if (!useCache)
+                modelRoot.AddComponent<GltfImportHolder>().Import = gltfImport;
+
+            EnableMaterialInstancing(modelRoot);
 
             return modelRoot;
+        }
+
+        /// <summary>
+        /// 配下の全 Renderer の sharedMaterials に enableInstancing = true を設定する。
+        /// sharedMaterial を操作することでマテリアルコピーを生成せず、
+        /// 同一マテリアルを持つ複数オブジェクトを Unity が自動的に GPU Instancing でバッチングする。
+        /// </summary>
+        private static void EnableMaterialInstancing(GameObject root)
+        {
+            foreach (var renderer in root.GetComponentsInChildren<Renderer>(includeInactive: true))
+            {
+                var mats = renderer.sharedMaterials;
+                foreach (var mat in mats)
+                    if (mat != null) mat.enableInstancing = true;
+            }
         }
 
         // ----------------------------------------------------------------
