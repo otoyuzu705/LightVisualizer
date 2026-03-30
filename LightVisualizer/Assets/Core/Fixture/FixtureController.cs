@@ -40,10 +40,11 @@ namespace Core.Fixture
         // Update() 毎に new byte[] しないためにフィールドで保持する（GC 圧軽減）
         private byte[] _universeDmxCache;
 
-        // ---- 前フレームの Pan/Tilt 値キャッシュ ----------------------------------
-        // ApplyDmx 内でチャンネルが見つからなかった場合に 0 へ戻らないようにする。
+        // ---- 前フレームの Pan/Tilt/Zoom 値キャッシュ ----------------------------
+        // ApplyDmx 内でチャンネルが見つからなかった場合に初期値へ戻らないようにする。
         private float _lastPan  = 0f;
         private float _lastTilt = 0f;
+        private float _lastZoom = -1f; // -1f = 未初期化（初回は zoomMin を使うセンチネル値）
 
         private void Awake()
         {
@@ -181,10 +182,11 @@ namespace Core.Fixture
             float dimmer = 0f;
             float r = 1f, g = 1f, b = 1f;
             float cyan = 0f, magenta = 0f, yellow = 0f;
-            float zoom   = zoomMin;
-            bool  hasCmy = false;
+            float zoom   = _lastZoom < 0f ? zoomMin : _lastZoom;
+            bool  hasCmy  = false;
             bool  hasPan  = false;
             bool  hasTilt = false;
+            bool  hasZoom = false;
 
             foreach (var channel in _fixture.ActiveDmxMode.Channels)
             {
@@ -220,12 +222,13 @@ namespace Core.Fixture
 
                 // --- Zoom ---
                 else if (attr == "zoom")
-                    zoom = Mathf.Lerp(zoomMin, zoomMax, norm);
+                    { zoom = Mathf.Lerp(zoomMin, zoomMax, norm); hasZoom = true; }
             }
 
             // 今フレームでチャンネルが見つかった場合のみキャッシュを更新
             if (hasPan)  _lastPan  = pan;
             if (hasTilt) _lastTilt = tilt;
+            if (hasZoom) _lastZoom = zoom;
 
             // CMY → RGB 変換（ColorAdd と CMY が混在する灯体は CMY を優先）
             if (hasCmy)
