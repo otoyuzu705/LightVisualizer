@@ -19,24 +19,35 @@ namespace Core.Fixture
 
         // Pan/Tilt 物理限界は GdtfGeometryInfo から Start() 時に設定する（GDTF PhysicalFrom/To）
         // Inspector でオーバーライドしたい場合は SerializeField を付けて使う
-        private float _panMin  = -270f;
-        private float _panMax  =  270f;
-        private float _tiltMin = -135f;
-        private float _tiltMax =  135f;
+        private float _panMin         = -270f;
+        private float _panMax         =  270f;
+        private float _tiltMin        = -135f;
+        private float _tiltMax        =  135f;
         private float _maxIntensityLm = 10000f;
 
         private FixtureInstance       _fixture;
         private ArtNetReceiver        _receiver;
         private HDAdditionalLightData _hdLight;
-        private bool                  _warnedOnce = false;
 
-        // ---- アロケートキャッシュ ----------------------------------------
-        // Update() 毎に new byte[] しないためにフィールドで保持する（④ GC 圧軽減）
+        // ---- 警告フラグ（条件ごとに独立させ、条件が回復したらリセットする） --------
+        // 単一の _warnedOnce で全条件をまとめると、一度でも警告が出た後に
+        // 条件が回復しても Update() の return が解除されないバグの原因になる。
+        private bool _warnedNoReceiver = false;
+        private bool _warnedNoMode     = false;
+        private bool _warnedUniverse   = false;
+
+        // ---- アロケートキャッシュ ------------------------------------------------
+        // Update() 毎に new byte[] しないためにフィールドで保持する（GC 圧軽減）
         private byte[] _universeDmxCache;
+
+        // ---- 前フレームの Pan/Tilt 値キャッシュ ----------------------------------
+        // ApplyDmx 内でチャンネルが見つからなかった場合に 0 へ戻らないようにする。
+        private float _lastPan  = 0f;
+        private float _lastTilt = 0f;
 
         private void Awake()
         {
-            _fixture = GetComponent<FixtureInstance>();
+            _fixture          = GetComponent<FixtureInstance>();
             _universeDmxCache = new byte[DmxBuffer.ChannelsPerUniverse];
         }
 
@@ -51,7 +62,7 @@ namespace Core.Fixture
             if (_fixture.BeamLight != null)
                 _hdLight = _fixture.BeamLight.GetComponent<HDAdditionalLightData>();
 
-            // GdtfData の状態をログ出力（null なら ActiveDmxMode も null になりUpdateが止まる）
+            // GdtfData の状態をログ出力（null なら ActiveDmxMode も null になり Update がスキップされる）
             if (_fixture.GdtfData == null)
                 Debug.LogError(
                     $"[FixtureController] GdtfData is NULL on '{gameObject.name}'. " +
@@ -64,42 +75,56 @@ namespace Core.Fixture
 
             // GDTF の物理限界をロード済みデータから取得
             ApplyPhysicalLimitsFromGdtf();
+
+            // glTF インポート由来の Animator が Transform を毎フレーム上書きしないよう無効化
+            DisableImportedAnimators();
         }
 
         private void Update()
         {
-            if (_receiver == null || _fixture.ActiveDmxMode == null)
+            // ---- ArtNetReceiver チェック ----------------------------------------
+            if (_receiver == null)
             {
-                // 原因を1回だけログ出力
-                if (!_warnedOnce)
+                if (!_warnedNoReceiver)
                 {
-                    _warnedOnce = true;
-                    if (_receiver == null)
-                        Debug.LogWarning(
-                            $"[FixtureController] Skipping: ArtNetReceiver is null on '{gameObject.name}'");
-                    else
-                        Debug.LogWarning(
-                            $"[FixtureController] Skipping: ActiveDmxMode is null on '{gameObject.name}' " +
-                            $"(GdtfData={((_fixture.GdtfData == null) ? "NULL" : "OK")})");
+                    _warnedNoReceiver = true;
+                    Debug.LogWarning(
+                        $"[FixtureController] Skipping: ArtNetReceiver is null on '{gameObject.name}'");
                 }
                 return;
             }
+            _warnedNoReceiver = false;
 
-            // スナップショット全体を取得せず、対象ユニバースだけを直接コピー（ノーアロケート）
-            // Universe は Inspector 上1始まり → DmxBuffer 内部の0始まりに変換
+            // ---- ActiveDmxMode チェック -----------------------------------------
+            if (_fixture.ActiveDmxMode == null)
+            {
+                if (!_warnedNoMode)
+                {
+                    _warnedNoMode = true;
+                    Debug.LogWarning(
+                        $"[FixtureController] Skipping: ActiveDmxMode is null on '{gameObject.name}' " +
+                        $"(GdtfData={(_fixture.GdtfData == null ? "NULL" : "OK")})");
+                }
+                return;
+            }
+            // 条件が回復したらフラグをリセット（次に壊れたとき再び警告を出せるようにする）
+            _warnedNoMode = false;
+
+            // ---- DMX データ取得（ノーアロケート） --------------------------------
+            // Universe は Inspector 上 1始まり → DmxBuffer 内部の 0始まりに変換
             int universeIndex = _fixture.Universe - 1;
             if (!_receiver.DmxBuffer.CopyUniverseTo(universeIndex, _universeDmxCache))
             {
-                // Universe が範囲外（0未満 or 32以上）の場合はスキップ
-                if (!_warnedOnce)
+                if (!_warnedUniverse)
                 {
-                    _warnedOnce = true;
+                    _warnedUniverse = true;
                     Debug.LogWarning(
                         $"[FixtureController] Universe {_fixture.Universe} is out of range " +
                         $"(valid: 1-{DmxBuffer.Universes}) on '{gameObject.name}'");
                 }
                 return;
             }
+            _warnedUniverse = false;
 
             ApplyDmx(_universeDmxCache);
         }
@@ -110,11 +135,10 @@ namespace Core.Fixture
 
         private void ApplyPhysicalLimitsFromGdtf()
         {
-            // FixtureInstance に書き込まれた GDTF 由来の物理限界・光束を読み取る
-            _panMin        = _fixture.PanMin;
-            _panMax        = _fixture.PanMax;
-            _tiltMin       = _fixture.TiltMin;
-            _tiltMax       = _fixture.TiltMax;
+            _panMin         = _fixture.PanMin;
+            _panMax         = _fixture.PanMax;
+            _tiltMin        = _fixture.TiltMin;
+            _tiltMax        = _fixture.TiltMax;
             _maxIntensityLm = _fixture.MaxIntensityLm;
 
             Debug.Log($"[FixtureController] Physical limits applied: " +
@@ -123,26 +147,51 @@ namespace Core.Fixture
                       $"MaxLm={_maxIntensityLm}");
         }
 
+        /// <summary>
+        /// glTFast がインポートした GameObject に付いている Animator を無効化する。
+        /// Animator が有効なままだと localRotation が毎フレーム上書きされ、
+        /// DMX による Pan/Tilt 制御が無効化される。
+        /// </summary>
+        private void DisableImportedAnimators()
+        {
+            if (_fixture.YokeTransform != null)
+                foreach (var anim in _fixture.YokeTransform.GetComponentsInChildren<Animator>())
+                {
+                    anim.enabled = false;
+                    Debug.Log($"[FixtureController] Animator disabled on Yoke: {anim.gameObject.name}");
+                }
+
+            if (_fixture.HeadTransform != null)
+                foreach (var anim in _fixture.HeadTransform.GetComponentsInChildren<Animator>())
+                {
+                    anim.enabled = false;
+                    Debug.Log($"[FixtureController] Animator disabled on Head: {anim.gameObject.name}");
+                }
+        }
+
         // ----------------------------------------------------------------
         // DMX 適用
         // ----------------------------------------------------------------
 
         private void ApplyDmx(byte[] universeDmx)
         {
-            float pan    = 0f;
-            float tilt   = 0f;
+            // 前フレームの値を初期値として使う（チャンネルが見つからない場合に 0° へ戻らないようにする）
+            float pan    = _lastPan;
+            float tilt   = _lastTilt;
             float dimmer = 0f;
             float r = 1f, g = 1f, b = 1f;
             float cyan = 0f, magenta = 0f, yellow = 0f;
-            float zoom = zoomMin;
+            float zoom   = zoomMin;
             bool  hasCmy = false;
+            bool  hasPan  = false;
+            bool  hasTilt = false;
 
             foreach (var channel in _fixture.ActiveDmxMode.Channels)
             {
                 if (channel.Offsets.Length == 0) continue;
 
-                byte  coarse = _fixture.GetDmxValue(universeDmx, channel.Offsets[0]);
-                byte  fine   = channel.Is16Bit
+                byte coarse = _fixture.GetDmxValue(universeDmx, channel.Offsets[0]);
+                byte fine   = channel.Is16Bit
                     ? _fixture.GetDmxValue(universeDmx, channel.Offsets[1])
                     : (byte)0;
 
@@ -153,20 +202,18 @@ namespace Core.Fixture
                 string attr = channel.AttributeName.ToLowerInvariant();
 
                 // --- Pan / Tilt ---
-                if      (attr == "pan")  pan  = Mathf.Lerp(_panMin,  _panMax,  norm);
-                else if (attr == "tilt") tilt = Mathf.Lerp(_tiltMin, _tiltMax, norm);
+                if (attr == "pan")  { pan  = Mathf.Lerp(_panMin,  _panMax,  norm); hasPan  = true; }
+                else if (attr == "tilt") { tilt = Mathf.Lerp(_tiltMin, _tiltMax, norm); hasTilt = true; }
 
                 // --- Dimmer ---
                 else if (attr == "dimmer") dimmer = norm;
 
                 // --- RGB 加算混色（ColorAdd_R/G/B）---
-                // GDTF では ColorAdd_R が「R LED の強さ」
                 else if (attr is "coloradd_r" or "colorrgb_red"   or "red"   or "r") r = norm;
                 else if (attr is "coloradd_g" or "colorrgb_green" or "green" or "g") g = norm;
                 else if (attr is "coloradd_b" or "colorrgb_blue"  or "blue"  or "b") b = norm;
 
                 // --- CMY 減算混色（ColorSub_C/M/Y）---
-                // フィルタ濃度: 0 = フィルタなし（白）、1 = 完全吸収
                 else if (attr is "colorsub_c" or "cyan")    { cyan    = norm; hasCmy = true; }
                 else if (attr is "colorsub_m" or "magenta") { magenta = norm; hasCmy = true; }
                 else if (attr is "colorsub_y" or "yellow")  { yellow  = norm; hasCmy = true; }
@@ -175,6 +222,10 @@ namespace Core.Fixture
                 else if (attr == "zoom")
                     zoom = Mathf.Lerp(zoomMin, zoomMax, norm);
             }
+
+            // 今フレームでチャンネルが見つかった場合のみキャッシュを更新
+            if (hasPan)  _lastPan  = pan;
+            if (hasTilt) _lastTilt = tilt;
 
             // CMY → RGB 変換（ColorAdd と CMY が混在する灯体は CMY を優先）
             if (hasCmy)
